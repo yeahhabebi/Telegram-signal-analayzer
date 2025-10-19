@@ -14,15 +14,14 @@ from telethon.sessions import StringSession
 import threading
 import queue
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+from collections import deque
 
 # Load environment variables
 load_dotenv()
 
 # Global variables
 signal_queue = queue.Queue()
-signals_data = []
-latest_signals = []
+latest_signals = deque(maxlen=30)
 
 class SignalProcessor:
     def __init__(self):
@@ -32,12 +31,12 @@ class SignalProcessor:
     def parse_signal(self, message):
         try:
             signal_data = {
-                'timestamp': datetime.now(),
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 'period_id': None,
                 'result': None,
                 'trade': None,
                 'quantity': None,
-                'message': message
+                'message': message[:200]  # Limit message length
             }
             
             # Extract period ID
@@ -60,7 +59,10 @@ class SignalProcessor:
             # Extract quantity
             quantity_match = re.search(r'quantity:\s*x?([\d.]+)', message)
             if quantity_match:
-                signal_data['quantity'] = float(quantity_match.group(1))
+                try:
+                    signal_data['quantity'] = float(quantity_match.group(1))
+                except ValueError:
+                    signal_data['quantity'] = None
             
             # Only add if we have valid data
             if signal_data['period_id'] and signal_data['result']:
@@ -72,7 +74,7 @@ class SignalProcessor:
             return None
     
     def add_signal(self, signal_data):
-        if signal_data and signal_data not in self.signals:
+        if signal_data and not any(s.get('period_id') == signal_data['period_id'] for s in self.signals):
             self.signals.append(signal_data)
             # Keep only last 50 signals
             if len(self.signals) > 50:
@@ -80,10 +82,11 @@ class SignalProcessor:
             
             # Update latest signals for dashboard
             global latest_signals
-            latest_signals = self.signals[-30:]  # Last 30 signals
+            latest_signals.append(signal_data)
             
             # Upload to R2
             self.upload_to_r2()
+            print(f"✅ Signal added: {signal_data['period_id']} - {signal_data['result']}")
     
     def upload_to_r2(self):
         try:
@@ -111,10 +114,10 @@ class SignalProcessor:
                 Body=json.dumps(upload_data, default=str),
                 ContentType='application/json'
             )
-            print("Data uploaded to R2 successfully")
+            print("✅ Data uploaded to R2 successfully")
             
         except Exception as e:
-            print(f"Error uploading to R2: {e}")
+            print(f"❌ Error uploading to R2: {e}")
     
     def load_existing_data(self):
         try:
@@ -133,11 +136,11 @@ class SignalProcessor:
             existing_data = json.loads(response['Body'].read())
             self.signals = existing_data.get('signals', [])
             global latest_signals
-            latest_signals = self.signals[-30:]
-            print("Existing data loaded from R2")
+            latest_signals.extend(self.signals[-30:])
+            print(f"✅ Loaded {len(self.signals)} existing signals from R2")
             
         except Exception as e:
-            print(f"No existing data found or error loading: {e}")
+            print(f"ℹ️ No existing data found: {e}")
     
     def get_stats(self):
         if not self.signals:
@@ -182,34 +185,37 @@ class TelegramMonitor:
             )
             
             await self.client.start()
-            print("Telegram client started successfully")
+            print("✅ Telegram client started successfully")
             
             # Get target chats
-            target_chats = os.getenv('TARGET_CHATS', '').split(',')
+            target_chats = [chat.strip() for chat in os.getenv('TARGET_CHATS', '').split(',') if chat.strip()]
+            print(f"🎯 Monitoring channels: {target_chats}")
             
             @self.client.on(self.client.NewMessage)
             async def handler(event):
                 try:
                     chat = await event.get_chat()
-                    if chat.username in target_chats or chat.id in target_chats:
+                    chat_username = getattr(chat, 'username', None)
+                    
+                    if chat_username in target_chats or str(chat.id) in target_chats:
                         message_text = event.message.text
                         if message_text:
+                            print(f"📨 New message from {chat_username}: {message_text[:100]}...")
                             signal_data = self.processor.parse_signal(message_text)
                             if signal_data:
                                 self.processor.add_signal(signal_data)
                                 signal_queue.put(signal_data)
-                                print(f"New signal processed: {signal_data['period_id']}")
                 except Exception as e:
-                    print(f"Error handling message: {e}")
+                    print(f"❌ Error handling message: {e}")
             
             self.is_running = True
-            print("Monitoring started...")
+            print("🔍 Telegram monitoring started...")
             
             # Keep the client running
             await self.client.run_until_disconnected()
             
         except Exception as e:
-            print(f"Error in Telegram monitor: {e}")
+            print(f"❌ Error in Telegram monitor: {e}")
     
     def stop(self):
         self.is_running = False
@@ -220,7 +226,12 @@ def run_telegram_monitor(processor):
     monitor = TelegramMonitor(processor)
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(monitor.start())
+    try:
+        loop.run_until_complete(monitor.start())
+    except Exception as e:
+        print(f"❌ Telegram monitor crashed: {e}")
+    finally:
+        loop.close()
 
 # Initialize processor
 processor = SignalProcessor()
@@ -241,142 +252,172 @@ st.set_page_config(
 st.markdown("""
 <style>
     .main-header {
-        font-size: 3rem;
+        font-size: 2.5rem;
         color: #1f77b4;
         text-align: center;
-        margin-bottom: 2rem;
+        margin-bottom: 1rem;
+        font-weight: bold;
     }
     .win-box {
         background-color: #d4edda;
-        padding: 10px;
+        padding: 8px;
         border-radius: 5px;
-        border-left: 5px solid #28a745;
+        border-left: 4px solid #28a745;
+        margin: 2px 0;
     }
     .loss-box {
         background-color: #f8d7da;
-        padding: 10px;
+        padding: 8px;
         border-radius: 5px;
-        border-left: 5px solid #dc3545;
-    }
-    .streak-box {
-        background-color: #fff3cd;
-        padding: 10px;
-        border-radius: 5px;
-        border-left: 5px solid #ffc107;
+        border-left: 4px solid #dc3545;
+        margin: 2px 0;
     }
     .signal-card {
-        padding: 10px;
-        margin: 5px 0;
+        padding: 8px;
+        margin: 4px 0;
         border-radius: 5px;
         border-left: 4px solid;
+        font-size: 0.9rem;
+    }
+    .metric-card {
+        background-color: #f8f9fa;
+        padding: 15px;
+        border-radius: 10px;
+        border-left: 5px solid #007bff;
+        margin: 5px;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Main Dashboard
-st.markdown('<div class="main-header">🎯 Coinryze Signal Analyzer</div>', unsafe_allow_html=True)
-
-# Auto-refresh every 3 seconds
-st_autorefresh = st.empty()
-
-# Stats Section
-col1, col2, col3, col4, col5 = st.columns(5)
-
-stats = processor.get_stats()
-
-with col1:
-    st.metric("Total Signals", stats['total'])
-with col2:
-    st.metric("Wins", stats['wins'], delta=f"{stats['wins']} wins")
-with col3:
-    st.metric("Losses", stats['losses'], delta=f"-{stats['losses']} losses", delta_color="inverse")
-with col4:
-    st.metric("Win Rate", f"{stats['win_rate']}%")
-with col5:
-    streak_color = "normal" if stats['current_streak'] < 3 else "off"
-    st.metric("Current Streak", stats['current_streak'], delta_color=streak_color)
-
-# Live Signals Section
-st.subheader("📊 Live Signals Dashboard")
-
-if latest_signals:
-    # Create DataFrame for display
-    df = pd.DataFrame(latest_signals)
-    df['timestamp'] = pd.to_datetime(df['timestamp'])
-    df = df.sort_values('timestamp', ascending=False)
+def main():
+    # Main Dashboard
+    st.markdown('<div class="main-header">🎯 Coinryze Signal Analyzer</div>', unsafe_allow_html=True)
     
-    # Display signals in cards
-    for _, signal in df.iterrows():
-        result_color = "#28a745" if signal['result'] == 'Win' else "#dc3545"
-        trade_color = "#28a745" if signal['trade'] == 'Green' else "#dc3545"
+    # Stats Section
+    col1, col2, col3, col4, col5 = st.columns(5)
+    stats = processor.get_stats()
+    
+    with col1:
+        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+        st.metric("📊 Total Signals", stats['total'])
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+        st.metric("✅ Wins", stats['wins'], delta=f"{stats['wins']} wins")
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    with col3:
+        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+        st.metric("❌ Losses", stats['losses'], delta=f"-{stats['losses']} losses", delta_color="inverse")
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    with col4:
+        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+        st.metric("📈 Win Rate", f"{stats['win_rate']}%")
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    with col5:
+        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+        streak_color = "normal" if stats['current_streak'] < 3 else "off"
+        st.metric("🔥 Current Streak", stats['current_streak'], delta_color=streak_color)
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Live Signals Section
+    st.subheader("📋 Live Signals (Last 30)")
+    
+    if list(latest_signals):
+        # Display signals in reverse order (newest first)
+        reversed_signals = list(latest_signals)[::-1]
         
-        col1, col2, col3, col4, col5 = st.columns([2, 2, 1, 1, 2])
+        for signal in reversed_signals:
+            result_color = "#28a745" if signal['result'] == 'Win' else "#dc3545"
+            trade_color = "#28a745" if signal['trade'] == 'Green' else "#dc3545"
+            
+            col1, col2, col3, col4, col5 = st.columns([2, 2, 1, 1, 2])
+            
+            with col1:
+                st.write(f"**{signal['period_id']}**")
+            with col2:
+                st.write(f"`{signal['timestamp'].split(' ')[1]}`")
+            with col3:
+                if signal['result'] == 'Win':
+                    st.markdown(f"<span style='color: {result_color}; font-weight: bold;'>✅ WIN</span>", unsafe_allow_html=True)
+                else:
+                    st.markdown(f"<span style='color: {result_color}; font-weight: bold;'>❌ LOSS</span>", unsafe_allow_html=True)
+            with col4:
+                if signal['trade']:
+                    st.markdown(f"<span style='color: {trade_color}; font-weight: bold;'>{signal['trade'].upper()}</span>", unsafe_allow_html=True)
+            with col5:
+                if signal['quantity']:
+                    st.write(f"**x{signal['quantity']}**")
         
-        with col1:
-            st.write(f"**Period ID:** {signal['period_id']}")
-        with col2:
-            st.write(f"**Time:** {signal['timestamp'].strftime('%H:%M:%S')}")
-        with col3:
-            st.markdown(f"<div style='color: {result_color}; font-weight: bold;'>{signal['result']}</div>", unsafe_allow_html=True)
-        with col4:
-            if signal['trade']:
-                st.markdown(f"<div style='color: {trade_color}; font-weight: bold;'>{signal['trade']}</div>", unsafe_allow_html=True)
-        with col5:
-            if signal['quantity']:
-                st.write(f"**Qty:** x{signal['quantity']}")
+        # Performance Chart
+        st.subheader("📈 Performance Trend")
+        if len(reversed_signals) > 1:
+            chart_data = reversed_signals[::-1]  # Reverse back for chronological order
+            df = pd.DataFrame(chart_data)
+            df['result_numeric'] = df['result'].apply(lambda x: 1 if x == 'Win' else 0)
+            df['index'] = range(len(df))
+            
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=df['index'],
+                y=df['result_numeric'],
+                mode='lines+markers',
+                name='Win/Loss',
+                line=dict(color='blue', width=2),
+                marker=dict(
+                    size=8,
+                    color=df['result_numeric'].apply(lambda x: 'green' if x == 1 else 'red'),
+                    symbol='circle'
+                )
+            ))
+            
+            fig.update_layout(
+                title='Signal Results Trend',
+                xaxis_title='Signal Sequence',
+                yaxis_title='Result (1=Win, 0=Loss)',
+                height=300,
+                showlegend=False
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("📡 Waiting for signals... Monitoring Telegram channels...")
+        st.write("**Connected Channels:**")
+        target_chats = [chat.strip() for chat in os.getenv('TARGET_CHATS', '').split(',') if chat.strip()]
+        for chat in target_chats:
+            st.write(f"- `{chat}`")
     
-    # Win/Loss Chart
-    st.subheader("📈 Performance Chart")
+    # System Status
+    st.sidebar.title("🔧 System Status")
+    st.sidebar.info("""
+    **Connected Services:**
+    - ✅ Telegram Monitoring
+    - ✅ Cloudflare R2 Storage  
+    - ✅ Real-time Dashboard
+    - 🔄 Auto-refresh: Every 3s
+    """)
     
-    chart_data = df.copy()
-    chart_data['result_numeric'] = chart_data['result'].apply(lambda x: 1 if x == 'Win' else 0)
-    chart_data = chart_data.sort_values('timestamp')
+    st.sidebar.subheader("📋 Last Signal")
+    if list(latest_signals):
+        last_signal = list(latest_signals)[-1]
+        st.sidebar.write(f"**Period:** `{last_signal['period_id']}`")
+        st.sidebar.write(f"**Result:** `{last_signal['result']}`")
+        st.sidebar.write(f"**Time:** `{last_signal['timestamp'].split(' ')[1]}`")
+        if last_signal['trade']:
+            st.sidebar.write(f"**Trade:** `{last_signal['trade']}`")
+    else:
+        st.sidebar.write("No signals received yet")
     
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=chart_data['timestamp'],
-        y=chart_data['result_numeric'],
-        mode='lines+markers',
-        name='Win/Loss',
-        line=dict(color='blue'),
-        marker=dict(
-            size=8,
-            color=chart_data['result_numeric'].apply(lambda x: 'green' if x == 1 else 'red'),
-            symbol='circle'
-        )
-    ))
+    st.sidebar.subheader("ℹ️ Info")
+    st.sidebar.write(f"**Total Signals:** {stats['total']}")
+    st.sidebar.write(f"**Last Update:** {datetime.now().strftime('%H:%M:%S')}")
     
-    fig.update_layout(
-        title='Signal Results Over Time',
-        xaxis_title='Time',
-        yaxis_title='Result (1=Win, 0=Loss)',
-        height=300
-    )
-    
-    st.plotly_chart(fig, use_container_width=True)
-    
-else:
-    st.info("📡 Waiting for signals... Monitoring Telegram channels...")
+    # Auto-refresh
+    time.sleep(3)
+    st.rerun()
 
-# System Status
-st.sidebar.title("🔧 System Status")
-st.sidebar.info("""
-**Connected Services:**
-- ✅ Telegram Monitoring
-- ✅ Cloudflare R2 Storage
-- ✅ Real-time Dashboard
-""")
-
-st.sidebar.subheader("📋 Last Signal")
-if latest_signals:
-    last_signal = latest_signals[-1]
-    st.sidebar.write(f"**Period:** {last_signal['period_id']}")
-    st.sidebar.write(f"**Result:** {last_signal['result']}")
-    st.sidebar.write(f"**Time:** {last_signal['timestamp'].strftime('%H:%M:%S')}")
-else:
-    st.sidebar.write("No signals yet")
-
-# Auto-refresh
-time.sleep(3)
-st_autorefresh.empty()
-st.rerun()
+if __name__ == "__main__":
+    main()
