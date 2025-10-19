@@ -1,6 +1,4 @@
 import streamlit as st
-import pandas as pd
-import re
 import json
 import time
 from datetime import datetime
@@ -10,6 +8,7 @@ import os
 from dotenv import load_dotenv
 import plotly.graph_objects as go
 from collections import deque
+import re
 
 # Load environment variables
 load_dotenv()
@@ -203,17 +202,19 @@ st.markdown("""
     }
     .win-signal {
         background-color: #d4edda;
-        padding: 10px;
+        padding: 12px;
         border-radius: 8px;
         border-left: 5px solid #28a745;
-        margin: 5px 0;
+        margin: 8px 0;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
     .loss-signal {
         background-color: #f8d7da;
-        padding: 10px;
+        padding: 12px;
         border-radius: 8px;
         border-left: 5px solid #dc3545;
-        margin: 5px 0;
+        margin: 8px 0;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
     .metric-card {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -222,6 +223,7 @@ st.markdown("""
         color: white;
         text-align: center;
         margin: 5px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
     .status-connected {
         color: #28a745;
@@ -231,12 +233,64 @@ st.markdown("""
         color: #dc3545;
         font-weight: bold;
     }
+    .refresh-info {
+        background-color: #e7f3ff;
+        padding: 10px;
+        border-radius: 5px;
+        border-left: 4px solid #007bff;
+        margin: 10px 0;
+    }
 </style>
 """, unsafe_allow_html=True)
+
+def create_performance_chart(signals_list):
+    """Create performance chart without pandas"""
+    if len(signals_list) < 2:
+        return None
+    
+    # Prepare chart data manually
+    x_data = []
+    y_data = []
+    colors = []
+    
+    for i, signal in enumerate(signals_list):
+        x_data.append(i)
+        y_data.append(1 if signal['result'] == 'Win' else 0)
+        colors.append('green' if signal['result'] == 'Win' else 'red')
+    
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=x_data,
+        y=y_data,
+        mode='lines+markers',
+        line=dict(color='blue', width=2),
+        marker=dict(
+            size=8,
+            color=colors,
+            symbol='circle'
+        )
+    ))
+    
+    fig.update_layout(
+        title='Signal Performance Trend (1=Win, 0=Loss)',
+        xaxis_title='Signal Sequence',
+        yaxis_title='Result',
+        height=300,
+        showlegend=False
+    )
+    
+    return fig
 
 def main():
     # Main Dashboard
     st.markdown('<div class="main-header">🎯 Coinryze Signal Analyzer</div>', unsafe_allow_html=True)
+    
+    # Auto-refresh info
+    st.markdown("""
+    <div class="refresh-info">
+        🔄 <strong>Live Dashboard</strong> - Auto-refreshes every 3 seconds
+    </div>
+    """, unsafe_allow_html=True)
     
     # Stats Section
     col1, col2, col3, col4, col5 = st.columns(5)
@@ -306,41 +360,9 @@ def main():
         # Performance Chart
         if len(signals_list) > 1:
             st.subheader("📈 Performance Trend")
-            
-            # Create simple chart data
-            chart_data = []
-            for i, signal in enumerate(signals_list):
-                chart_data.append({
-                    'index': i,
-                    'result': 1 if signal['result'] == 'Win' else 0,
-                    'period': signal['period_id'][-3:],  # Last 3 digits
-                    'color': 'green' if signal['result'] == 'Win' else 'red'
-                })
-            
-            df = pd.DataFrame(chart_data)
-            
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=df['index'],
-                y=df['result'],
-                mode='lines+markers',
-                line=dict(color='blue', width=2),
-                marker=dict(
-                    size=8,
-                    color=df['color'],
-                    symbol='circle'
-                )
-            ))
-            
-            fig.update_layout(
-                title='Signal Results Trend (1=Win, 0=Loss)',
-                xaxis_title='Signal Sequence',
-                yaxis_title='Result',
-                height=300,
-                showlegend=False
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
+            fig = create_performance_chart(signals_list)
+            if fig:
+                st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("📡 Waiting for signals...")
         st.write("**System is ready to receive signals!**")
@@ -370,6 +392,7 @@ def main():
     
     if telegram_connected:
         st.sidebar.markdown('<p class="status-connected">✅ Telegram: Ready</p>', unsafe_allow_html=True)
+        st.sidebar.write(f"**Monitoring:** {os.getenv('TARGET_CHATS', 'No channels set')}")
     else:
         st.sidebar.markdown('<p class="status-disconnected">❌ Telegram: Setup Required</p>', unsafe_allow_html=True)
     
@@ -389,8 +412,18 @@ def main():
     
     # Manual Testing
     st.sidebar.subheader("🧪 Test Signal Input")
-    test_signal = st.sidebar.text_area("Paste signal message:", height=100)
-    if st.sidebar.button("Process Test Signal"):
+    st.sidebar.write("Paste a sample signal to test:")
+    
+    sample_signal = """⏰Transaction type: ETH 1 minutes⏰
+🚥Transaction Tips🚥
+📌Current period ID: 202510170355
+🔔Result:Win🎉
+📲Trade: 🟢✔️
+Recommended quantity: x2.5"""
+    
+    test_signal = st.sidebar.text_area("Signal Message:", value=sample_signal, height=120)
+    
+    if st.sidebar.button("🚀 Process Test Signal"):
         if test_signal:
             signal_data = processor.parse_signal(test_signal)
             if signal_data:
@@ -400,6 +433,12 @@ def main():
                 st.sidebar.error("❌ Invalid signal format")
         else:
             st.sidebar.warning("⚠️ Please enter a signal message")
+    
+    # System Info
+    st.sidebar.subheader("ℹ️ System Info")
+    st.sidebar.write(f"**Last Update:** {datetime.now().strftime('%H:%M:%S')}")
+    st.sidebar.write(f"**Total Signals:** {stats['total']}")
+    st.sidebar.write(f"**Signals in Memory:** {len(signals_list)}")
     
     # Auto-refresh
     time.sleep(3)
