@@ -2,7 +2,7 @@ streamlit==1.28.0
 telethon==1.28.5
 python-dotenv==1.0.0
 boto3==1.28.62
-pandas==2.0.3
+pandas==2.1.4
 plotly==5.15.0
-asyncio==3.4.3
 aiofiles==23.1.0
+pytz==2023.3
