@@ -1,8 +1,5 @@
 streamlit==1.28.0
-telethon==1.28.5
-python-dotenv==1.0.0
-boto3==1.28.62
-pandas==2.2.0
+pandas==1.5.3
 plotly==5.15.0
-aiofiles==23.1.0
-pytz==2023.3
+boto3==1.28.62
+python-dotenv==1.0.0
