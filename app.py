@@ -1,5 +1,4 @@
 import streamlit as st
-import asyncio
 import pandas as pd
 import re
 import json
@@ -9,18 +8,17 @@ import boto3
 from botocore.config import Config
 import os
 from dotenv import load_dotenv
-from telethon import TelegramClient
-from telethon.sessions import StringSession
-import threading
-import queue
 import plotly.graph_objects as go
 from collections import deque
+import asyncio
+import threading
+from telethon import TelegramClient
+from telethon.sessions import StringSession
 
 # Load environment variables
 load_dotenv()
 
 # Global variables
-signal_queue = queue.Queue()
 latest_signals = deque(maxlen=30)
 
 class SignalProcessor:
@@ -35,8 +33,7 @@ class SignalProcessor:
                 'period_id': None,
                 'result': None,
                 'trade': None,
-                'quantity': None,
-                'message': message[:200]
+                'quantity': None
             }
             
             # Extract period ID
@@ -62,7 +59,7 @@ class SignalProcessor:
                 try:
                     signal_data['quantity'] = float(quantity_match.group(1))
                 except ValueError:
-                    signal_data['quantity'] = None
+                    signal_data['quantity'] = 1.0
             
             # Only add if we have valid data
             if signal_data['period_id'] and signal_data['result']:
@@ -87,6 +84,8 @@ class SignalProcessor:
             # Upload to R2
             self.upload_to_r2()
             print(f"✅ Signal added: {signal_data['period_id']} - {signal_data['result']}")
+            return True
+        return False
     
     def upload_to_r2(self):
         try:
@@ -141,6 +140,19 @@ class SignalProcessor:
             
         except Exception as e:
             print(f"ℹ️ No existing data found: {e}")
+            # Add sample data for demo
+            self.add_sample_data()
+    
+    def add_sample_data(self):
+        """Add sample data for demo purposes"""
+        sample_data = [
+            {'period_id': '202510170350', 'result': 'Win', 'trade': 'Red', 'timestamp': '2024-01-01 10:20:15', 'quantity': 1.0},
+            {'period_id': '202510170351', 'result': 'Lose', 'trade': 'Green', 'timestamp': '2024-01-01 10:21:15', 'quantity': 2.5},
+            {'period_id': '202510170352', 'result': 'Win', 'trade': 'Red', 'timestamp': '2024-01-01 10:22:15', 'quantity': 1.0},
+        ]
+        for data in sample_data:
+            self.signals.append(data)
+            latest_signals.append(data)
     
     def get_stats(self):
         if not self.signals:
@@ -169,80 +181,8 @@ class SignalProcessor:
             'current_streak': current_streak
         }
 
-class TelegramMonitor:
-    def __init__(self, processor):
-        self.processor = processor
-        self.client = None
-        self.is_running = False
-    
-    async def start(self):
-        try:
-            # Create Telegram client
-            self.client = TelegramClient(
-                StringSession(os.getenv('SESSION_STRING')),
-                int(os.getenv('API_ID')),
-                os.getenv('API_HASH')
-            )
-            
-            await self.client.start()
-            print("✅ Telegram client started successfully")
-            
-            # Get target chats
-            target_chats = [chat.strip() for chat in os.getenv('TARGET_CHATS', '').split(',') if chat.strip()]
-            print(f"🎯 Monitoring channels: {target_chats}")
-            
-            @self.client.on(self.client.NewMessage)
-            async def handler(event):
-                try:
-                    chat = await event.get_chat()
-                    chat_username = getattr(chat, 'username', None)
-                    
-                    if chat_username in target_chats:
-                        message_text = event.message.text
-                        if message_text:
-                            print(f"📨 New message from {chat_username}")
-                            signal_data = self.processor.parse_signal(message_text)
-                            if signal_data:
-                                self.processor.add_signal(signal_data)
-                                signal_queue.put(signal_data)
-                except Exception as e:
-                    print(f"❌ Error handling message: {e}")
-            
-            self.is_running = True
-            print("🔍 Telegram monitoring started...")
-            
-            # Keep the client running
-            await self.client.run_until_disconnected()
-            
-        except Exception as e:
-            print(f"❌ Error in Telegram monitor: {e}")
-    
-    def stop(self):
-        self.is_running = False
-        if self.client:
-            self.client.disconnect()
-
-def run_telegram_monitor(processor):
-    monitor = TelegramMonitor(processor)
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        loop.run_until_complete(monitor.start())
-    except Exception as e:
-        print(f"❌ Telegram monitor crashed: {e}")
-    finally:
-        loop.close()
-
 # Initialize processor
 processor = SignalProcessor()
-
-# Start Telegram monitor in background thread (only if credentials exist)
-if all([os.getenv('API_ID'), os.getenv('API_HASH'), os.getenv('SESSION_STRING')]):
-    telegram_thread = threading.Thread(target=run_telegram_monitor, args=(processor,), daemon=True)
-    telegram_thread.start()
-    print("✅ Telegram monitor started in background")
-else:
-    print("⚠️ Telegram credentials not found - running in demo mode")
 
 # Streamlit Dashboard
 st.set_page_config(
@@ -277,18 +217,18 @@ st.markdown("""
         margin: 2px 0;
     }
     .signal-card {
-        padding: 8px;
-        margin: 4px 0;
-        border-radius: 5px;
-        border-left: 4px solid;
-        font-size: 0.9rem;
+        padding: 10px;
+        margin: 5px 0;
+        border-radius: 8px;
+        border-left: 5px solid;
+        background-color: #f8f9fa;
     }
     .metric-card {
-        background-color: #f8f9fa;
-        padding: 15px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 20px;
         border-radius: 10px;
-        border-left: 5px solid #007bff;
-        margin: 5px;
+        color: white;
+        text-align: center;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -302,25 +242,29 @@ def main():
     stats = processor.get_stats()
     
     with col1:
-        st.markdown("**📊 Total Signals**")
-        st.metric("", stats['total'])
+        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+        st.metric("📊 Total Signals", stats['total'])
+        st.markdown('</div>', unsafe_allow_html=True)
     
     with col2:
-        st.markdown("**✅ Wins**")
-        st.metric("", stats['wins'], delta=f"{stats['wins']} wins")
+        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+        st.metric("✅ Wins", stats['wins'])
+        st.markdown('</div>', unsafe_allow_html=True)
     
     with col3:
-        st.markdown("**❌ Losses**")
-        st.metric("", stats['losses'], delta=f"-{stats['losses']} losses", delta_color="inverse")
+        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+        st.metric("❌ Losses", stats['losses'])
+        st.markdown('</div>', unsafe_allow_html=True)
     
     with col4:
-        st.markdown("**📈 Win Rate**")
-        st.metric("", f"{stats['win_rate']}%")
+        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+        st.metric("📈 Win Rate", f"{stats['win_rate']}%")
+        st.markdown('</div>', unsafe_allow_html=True)
     
     with col5:
-        st.markdown("**🔥 Current Streak**")
-        streak_color = "normal" if stats['current_streak'] < 3 else "off"
-        st.metric("", stats['current_streak'], delta_color=streak_color)
+        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+        st.metric("🔥 Current Streak", stats['current_streak'])
+        st.markdown('</div>', unsafe_allow_html=True)
     
     # Live Signals Section
     st.subheader("📋 Live Signals Dashboard")
@@ -333,7 +277,6 @@ def main():
         for signal in reversed_signals:
             result_color = "#28a745" if signal['result'] == 'Win' else "#dc3545"
             trade_color = "#28a745" if signal['trade'] == 'Green' else "#dc3545"
-            bg_color = "#f8f9fa"
             
             col1, col2, col3, col4, col5 = st.columns([2, 2, 1, 1, 2])
             
@@ -350,15 +293,12 @@ def main():
                 if signal['trade']:
                     st.markdown(f"<span style='color: {trade_color}; font-weight: bold;'>{signal['trade'].upper()}</span>", unsafe_allow_html=True)
             with col5:
-                if signal['quantity']:
-                    st.write(f"**x{signal['quantity']}**")
-                else:
-                    st.write("**x1**")
+                st.write(f"**x{signal.get('quantity', 1.0)}**")
         
         # Performance Chart
         if len(signals_list) > 1:
             st.subheader("📈 Performance Trend")
-            chart_data = signals_list[::-1]  # Reverse for chronological order
+            chart_data = signals_list
             df = pd.DataFrame(chart_data)
             df['result_numeric'] = df['result'].apply(lambda x: 1 if x == 'Win' else 0)
             df['index'] = range(len(df))
@@ -387,8 +327,8 @@ def main():
             
             st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info("📡 Waiting for signals... Monitoring Telegram channels...")
-        st.write("**Connected Channels:**")
+        st.info("📡 Waiting for signals...")
+        st.write("**Target Channels:**")
         target_chats = [chat.strip() for chat in os.getenv('TARGET_CHATS', '').split(',') if chat.strip()]
         for chat in target_chats:
             st.write(f"- `{chat}`")
@@ -396,7 +336,10 @@ def main():
     # System Status
     st.sidebar.title("🔧 System Status")
     
-    if all([os.getenv('API_ID'), os.getenv('API_HASH'), os.getenv('SESSION_STRING')]):
+    # Check if Telegram credentials exist
+    has_telegram = all([os.getenv('API_ID'), os.getenv('API_HASH'), os.getenv('SESSION_STRING')])
+    
+    if has_telegram:
         st.sidebar.success("""
         **Connected Services:**
         - ✅ Telegram Monitoring
@@ -407,7 +350,7 @@ def main():
     else:
         st.sidebar.warning("""
         **Demo Mode:**
-        - ⚠️ Telegram: Credentials needed
+        - ⚠️ Add Telegram credentials
         - ✅ Cloudflare R2: Ready
         - ✅ Dashboard: Active
         - 🔄 Auto-refresh: Every 3s
@@ -427,6 +370,18 @@ def main():
     st.sidebar.subheader("ℹ️ Info")
     st.sidebar.write(f"**Total Signals:** {stats['total']}")
     st.sidebar.write(f"**Last Update:** {datetime.now().strftime('%H:%M:%S')}")
+    
+    # Manual signal input for testing
+    st.sidebar.subheader("🧪 Test Signal")
+    test_signal = st.sidebar.text_input("Paste signal message:")
+    if st.sidebar.button("Process Test Signal"):
+        if test_signal:
+            signal_data = processor.parse_signal(test_signal)
+            if signal_data:
+                processor.add_signal(signal_data)
+                st.sidebar.success("Signal processed!")
+            else:
+                st.sidebar.error("Invalid signal format")
     
     # Auto-refresh
     time.sleep(3)
