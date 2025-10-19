@@ -1,4 +1,4 @@
-📁 README.md (Copy-Paste Version)
+📁 README.md
 
 ```markdown
 # 🎯 Coinryze Signal Analyzer
