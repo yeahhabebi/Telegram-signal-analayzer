@@ -36,7 +36,7 @@ class SignalProcessor:
                 'result': None,
                 'trade': None,
                 'quantity': None,
-                'message': message[:200]  # Limit message length
+                'message': message[:200]
             }
             
             # Extract period ID
@@ -197,10 +197,10 @@ class TelegramMonitor:
                     chat = await event.get_chat()
                     chat_username = getattr(chat, 'username', None)
                     
-                    if chat_username in target_chats or str(chat.id) in target_chats:
+                    if chat_username in target_chats:
                         message_text = event.message.text
                         if message_text:
-                            print(f"📨 New message from {chat_username}: {message_text[:100]}...")
+                            print(f"📨 New message from {chat_username}")
                             signal_data = self.processor.parse_signal(message_text)
                             if signal_data:
                                 self.processor.add_signal(signal_data)
@@ -236,9 +236,13 @@ def run_telegram_monitor(processor):
 # Initialize processor
 processor = SignalProcessor()
 
-# Start Telegram monitor in background thread
-telegram_thread = threading.Thread(target=run_telegram_monitor, args=(processor,), daemon=True)
-telegram_thread.start()
+# Start Telegram monitor in background thread (only if credentials exist)
+if all([os.getenv('API_ID'), os.getenv('API_HASH'), os.getenv('SESSION_STRING')]):
+    telegram_thread = threading.Thread(target=run_telegram_monitor, args=(processor,), daemon=True)
+    telegram_thread.start()
+    print("✅ Telegram monitor started in background")
+else:
+    print("⚠️ Telegram credentials not found - running in demo mode")
 
 # Streamlit Dashboard
 st.set_page_config(
@@ -298,41 +302,38 @@ def main():
     stats = processor.get_stats()
     
     with col1:
-        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-        st.metric("📊 Total Signals", stats['total'])
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown("**📊 Total Signals**")
+        st.metric("", stats['total'])
     
     with col2:
-        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-        st.metric("✅ Wins", stats['wins'], delta=f"{stats['wins']} wins")
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown("**✅ Wins**")
+        st.metric("", stats['wins'], delta=f"{stats['wins']} wins")
     
     with col3:
-        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-        st.metric("❌ Losses", stats['losses'], delta=f"-{stats['losses']} losses", delta_color="inverse")
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown("**❌ Losses**")
+        st.metric("", stats['losses'], delta=f"-{stats['losses']} losses", delta_color="inverse")
     
     with col4:
-        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-        st.metric("📈 Win Rate", f"{stats['win_rate']}%")
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown("**📈 Win Rate**")
+        st.metric("", f"{stats['win_rate']}%")
     
     with col5:
-        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+        st.markdown("**🔥 Current Streak**")
         streak_color = "normal" if stats['current_streak'] < 3 else "off"
-        st.metric("🔥 Current Streak", stats['current_streak'], delta_color=streak_color)
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.metric("", stats['current_streak'], delta_color=streak_color)
     
     # Live Signals Section
-    st.subheader("📋 Live Signals (Last 30)")
+    st.subheader("📋 Live Signals Dashboard")
     
-    if list(latest_signals):
+    signals_list = list(latest_signals)
+    if signals_list:
         # Display signals in reverse order (newest first)
-        reversed_signals = list(latest_signals)[::-1]
+        reversed_signals = signals_list[::-1]
         
         for signal in reversed_signals:
             result_color = "#28a745" if signal['result'] == 'Win' else "#dc3545"
             trade_color = "#28a745" if signal['trade'] == 'Green' else "#dc3545"
+            bg_color = "#f8f9fa"
             
             col1, col2, col3, col4, col5 = st.columns([2, 2, 1, 1, 2])
             
@@ -351,11 +352,13 @@ def main():
             with col5:
                 if signal['quantity']:
                     st.write(f"**x{signal['quantity']}**")
+                else:
+                    st.write("**x1**")
         
         # Performance Chart
-        st.subheader("📈 Performance Trend")
-        if len(reversed_signals) > 1:
-            chart_data = reversed_signals[::-1]  # Reverse back for chronological order
+        if len(signals_list) > 1:
+            st.subheader("📈 Performance Trend")
+            chart_data = signals_list[::-1]  # Reverse for chronological order
             df = pd.DataFrame(chart_data)
             df['result_numeric'] = df['result'].apply(lambda x: 1 if x == 'Win' else 0)
             df['index'] = range(len(df))
@@ -392,17 +395,27 @@ def main():
     
     # System Status
     st.sidebar.title("🔧 System Status")
-    st.sidebar.info("""
-    **Connected Services:**
-    - ✅ Telegram Monitoring
-    - ✅ Cloudflare R2 Storage  
-    - ✅ Real-time Dashboard
-    - 🔄 Auto-refresh: Every 3s
-    """)
+    
+    if all([os.getenv('API_ID'), os.getenv('API_HASH'), os.getenv('SESSION_STRING')]):
+        st.sidebar.success("""
+        **Connected Services:**
+        - ✅ Telegram Monitoring
+        - ✅ Cloudflare R2 Storage  
+        - ✅ Real-time Dashboard
+        - 🔄 Auto-refresh: Every 3s
+        """)
+    else:
+        st.sidebar.warning("""
+        **Demo Mode:**
+        - ⚠️ Telegram: Credentials needed
+        - ✅ Cloudflare R2: Ready
+        - ✅ Dashboard: Active
+        - 🔄 Auto-refresh: Every 3s
+        """)
     
     st.sidebar.subheader("📋 Last Signal")
-    if list(latest_signals):
-        last_signal = list(latest_signals)[-1]
+    if signals_list:
+        last_signal = signals_list[-1]
         st.sidebar.write(f"**Period:** `{last_signal['period_id']}`")
         st.sidebar.write(f"**Result:** `{last_signal['result']}`")
         st.sidebar.write(f"**Time:** `{last_signal['timestamp'].split(' ')[1]}`")
