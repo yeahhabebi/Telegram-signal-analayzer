@@ -10,10 +10,6 @@ import os
 from dotenv import load_dotenv
 import plotly.graph_objects as go
 from collections import deque
-import asyncio
-import threading
-from telethon import TelegramClient
-from telethon.sessions import StringSession
 
 # Load environment variables
 load_dotenv()
@@ -33,7 +29,7 @@ class SignalProcessor:
                 'period_id': None,
                 'result': None,
                 'trade': None,
-                'quantity': None
+                'quantity': 1.0
             }
             
             # Extract period ID
@@ -58,7 +54,7 @@ class SignalProcessor:
             if quantity_match:
                 try:
                     signal_data['quantity'] = float(quantity_match.group(1))
-                except ValueError:
+                except:
                     signal_data['quantity'] = 1.0
             
             # Only add if we have valid data
@@ -149,10 +145,13 @@ class SignalProcessor:
             {'period_id': '202510170350', 'result': 'Win', 'trade': 'Red', 'timestamp': '2024-01-01 10:20:15', 'quantity': 1.0},
             {'period_id': '202510170351', 'result': 'Lose', 'trade': 'Green', 'timestamp': '2024-01-01 10:21:15', 'quantity': 2.5},
             {'period_id': '202510170352', 'result': 'Win', 'trade': 'Red', 'timestamp': '2024-01-01 10:22:15', 'quantity': 1.0},
+            {'period_id': '202510170353', 'result': 'Win', 'trade': 'Green', 'timestamp': '2024-01-01 10:23:15', 'quantity': 1.0},
+            {'period_id': '202510170354', 'result': 'Lose', 'trade': 'Red', 'timestamp': '2024-01-01 10:24:15', 'quantity': 3.0},
         ]
         for data in sample_data:
             self.signals.append(data)
             latest_signals.append(data)
+        print("✅ Sample data loaded for demo")
     
     def get_stats(self):
         if not self.signals:
@@ -202,26 +201,19 @@ st.markdown("""
         margin-bottom: 1rem;
         font-weight: bold;
     }
-    .win-box {
+    .win-signal {
         background-color: #d4edda;
-        padding: 8px;
-        border-radius: 5px;
-        border-left: 4px solid #28a745;
-        margin: 2px 0;
-    }
-    .loss-box {
-        background-color: #f8d7da;
-        padding: 8px;
-        border-radius: 5px;
-        border-left: 4px solid #dc3545;
-        margin: 2px 0;
-    }
-    .signal-card {
         padding: 10px;
-        margin: 5px 0;
         border-radius: 8px;
-        border-left: 5px solid;
-        background-color: #f8f9fa;
+        border-left: 5px solid #28a745;
+        margin: 5px 0;
+    }
+    .loss-signal {
+        background-color: #f8d7da;
+        padding: 10px;
+        border-radius: 8px;
+        border-left: 5px solid #dc3545;
+        margin: 5px 0;
     }
     .metric-card {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -229,6 +221,15 @@ st.markdown("""
         border-radius: 10px;
         color: white;
         text-align: center;
+        margin: 5px;
+    }
+    .status-connected {
+        color: #28a745;
+        font-weight: bold;
+    }
+    .status-disconnected {
+        color: #dc3545;
+        font-weight: bold;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -275,52 +276,66 @@ def main():
         reversed_signals = signals_list[::-1]
         
         for signal in reversed_signals:
-            result_color = "#28a745" if signal['result'] == 'Win' else "#dc3545"
+            if signal['result'] == 'Win':
+                css_class = "win-signal"
+                result_icon = "✅ WIN"
+                result_color = "#28a745"
+            else:
+                css_class = "loss-signal"
+                result_icon = "❌ LOSS"
+                result_color = "#dc3545"
+            
             trade_color = "#28a745" if signal['trade'] == 'Green' else "#dc3545"
             
+            st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
             col1, col2, col3, col4, col5 = st.columns([2, 2, 1, 1, 2])
             
             with col1:
-                st.write(f"**{signal['period_id']}**")
+                st.write(f"**Period ID:** `{signal['period_id']}`")
             with col2:
-                st.write(f"`{signal['timestamp'].split(' ')[1]}`")
+                st.write(f"**Time:** `{signal['timestamp'].split(' ')[1]}`")
             with col3:
-                if signal['result'] == 'Win':
-                    st.markdown(f"<span style='color: {result_color}; font-weight: bold;'>✅ WIN</span>", unsafe_allow_html=True)
-                else:
-                    st.markdown(f"<span style='color: {result_color}; font-weight: bold;'>❌ LOSS</span>", unsafe_allow_html=True)
+                st.markdown(f"<span style='color: {result_color}; font-weight: bold;'>{result_icon}</span>", unsafe_allow_html=True)
             with col4:
                 if signal['trade']:
                     st.markdown(f"<span style='color: {trade_color}; font-weight: bold;'>{signal['trade'].upper()}</span>", unsafe_allow_html=True)
             with col5:
-                st.write(f"**x{signal.get('quantity', 1.0)}**")
+                st.write(f"**Quantity:** x{signal.get('quantity', 1.0)}")
+            st.markdown('</div>', unsafe_allow_html=True)
         
         # Performance Chart
         if len(signals_list) > 1:
             st.subheader("📈 Performance Trend")
-            chart_data = signals_list
+            
+            # Create simple chart data
+            chart_data = []
+            for i, signal in enumerate(signals_list):
+                chart_data.append({
+                    'index': i,
+                    'result': 1 if signal['result'] == 'Win' else 0,
+                    'period': signal['period_id'][-3:],  # Last 3 digits
+                    'color': 'green' if signal['result'] == 'Win' else 'red'
+                })
+            
             df = pd.DataFrame(chart_data)
-            df['result_numeric'] = df['result'].apply(lambda x: 1 if x == 'Win' else 0)
-            df['index'] = range(len(df))
             
             fig = go.Figure()
             fig.add_trace(go.Scatter(
                 x=df['index'],
-                y=df['result_numeric'],
+                y=df['result'],
                 mode='lines+markers',
-                name='Win/Loss',
                 line=dict(color='blue', width=2),
                 marker=dict(
                     size=8,
-                    color=df['result_numeric'].apply(lambda x: 'green' if x == 1 else 'red'),
+                    color=df['color'],
                     symbol='circle'
                 )
             ))
             
             fig.update_layout(
-                title='Signal Results Trend',
+                title='Signal Results Trend (1=Win, 0=Loss)',
                 xaxis_title='Signal Sequence',
-                yaxis_title='Result (1=Win, 0=Loss)',
+                yaxis_title='Result',
                 height=300,
                 showlegend=False
             )
@@ -328,34 +343,39 @@ def main():
             st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("📡 Waiting for signals...")
-        st.write("**Target Channels:**")
-        target_chats = [chat.strip() for chat in os.getenv('TARGET_CHATS', '').split(',') if chat.strip()]
-        for chat in target_chats:
-            st.write(f"- `{chat}`")
+        st.write("**System is ready to receive signals!**")
     
-    # System Status
+    # System Status Sidebar
     st.sidebar.title("🔧 System Status")
     
-    # Check if Telegram credentials exist
-    has_telegram = all([os.getenv('API_ID'), os.getenv('API_HASH'), os.getenv('SESSION_STRING')])
+    # Check services
+    r2_connected = all([
+        os.getenv('R2_ACCESS_KEY_ID'),
+        os.getenv('R2_SECRET_ACCESS_KEY'), 
+        os.getenv('R2_BUCKET')
+    ])
     
-    if has_telegram:
-        st.sidebar.success("""
-        **Connected Services:**
-        - ✅ Telegram Monitoring
-        - ✅ Cloudflare R2 Storage  
-        - ✅ Real-time Dashboard
-        - 🔄 Auto-refresh: Every 3s
-        """)
+    telegram_connected = all([
+        os.getenv('API_ID'),
+        os.getenv('API_HASH'),
+        os.getenv('SESSION_STRING')
+    ])
+    
+    st.sidebar.subheader("📊 Connection Status")
+    
+    if r2_connected:
+        st.sidebar.markdown('<p class="status-connected">✅ Cloudflare R2: Connected</p>', unsafe_allow_html=True)
     else:
-        st.sidebar.warning("""
-        **Demo Mode:**
-        - ⚠️ Add Telegram credentials
-        - ✅ Cloudflare R2: Ready
-        - ✅ Dashboard: Active
-        - 🔄 Auto-refresh: Every 3s
-        """)
+        st.sidebar.markdown('<p class="status-disconnected">❌ Cloudflare R2: Missing Credentials</p>', unsafe_allow_html=True)
     
+    if telegram_connected:
+        st.sidebar.markdown('<p class="status-connected">✅ Telegram: Ready</p>', unsafe_allow_html=True)
+    else:
+        st.sidebar.markdown('<p class="status-disconnected">❌ Telegram: Setup Required</p>', unsafe_allow_html=True)
+    
+    st.sidebar.markdown('<p class="status-connected">✅ Dashboard: Active</p>', unsafe_allow_html=True)
+    
+    # Last Signal Info
     st.sidebar.subheader("📋 Last Signal")
     if signals_list:
         last_signal = signals_list[-1]
@@ -367,21 +387,19 @@ def main():
     else:
         st.sidebar.write("No signals received yet")
     
-    st.sidebar.subheader("ℹ️ Info")
-    st.sidebar.write(f"**Total Signals:** {stats['total']}")
-    st.sidebar.write(f"**Last Update:** {datetime.now().strftime('%H:%M:%S')}")
-    
-    # Manual signal input for testing
-    st.sidebar.subheader("🧪 Test Signal")
-    test_signal = st.sidebar.text_input("Paste signal message:")
+    # Manual Testing
+    st.sidebar.subheader("🧪 Test Signal Input")
+    test_signal = st.sidebar.text_area("Paste signal message:", height=100)
     if st.sidebar.button("Process Test Signal"):
         if test_signal:
             signal_data = processor.parse_signal(test_signal)
             if signal_data:
                 processor.add_signal(signal_data)
-                st.sidebar.success("Signal processed!")
+                st.sidebar.success(f"✅ Signal processed: {signal_data['period_id']}")
             else:
-                st.sidebar.error("Invalid signal format")
+                st.sidebar.error("❌ Invalid signal format")
+        else:
+            st.sidebar.warning("⚠️ Please enter a signal message")
     
     # Auto-refresh
     time.sleep(3)
